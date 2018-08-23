@@ -44,8 +44,7 @@ static mut BUTTON: Option<hal::gpio::gpiob::PB0<hal::gpio::Input<hal::gpio::Floa
 static mut LED: Option<hal::gpio::gpioc::PC13<hal::gpio::Output<hal::gpio::PushPull>>> =
     None;
 static mut SPEAKER: Option<pwm_speaker::Speaker> = None;
-static mut SONG: Option<core::iter::Cycle<pwm_speaker::songs::Events>> = None;
-static mut WAIT_SONG: u32 = 0;
+static mut SONG: Option<core::iter::Cycle<pwm_speaker::songs::MsEvents>> = None;
 
 fn main() -> ! {
     let dp = hal::stm32f103xx::Peripherals::take().unwrap();
@@ -76,7 +75,7 @@ fn main() -> ! {
         BUTTON = Some(button);
         LED = Some(led);
         SPEAKER = Some(speaker);
-        SONG = Some(pwm_speaker::songs::LAVENTURIER.events().cycle());
+        SONG = Some(pwm_speaker::songs::THIRD_KIND.events().ms_events().cycle());
     }
 
     loop {
@@ -90,33 +89,23 @@ fn tim3(manager: &mut ButtonManager) {
     let button = unsafe { BUTTON.as_ref().unwrap() };
     let led = unsafe { LED.as_mut().unwrap() };
     let speaker = unsafe { SPEAKER.as_mut().unwrap() };
-    let wait_song = unsafe { &mut WAIT_SONG };
 
     if manager.is_pressed(button.is_high()) {
         if led.is_set_low() {
             led.set_high();
+            speaker.unmute();
         } else {
             led.set_low();
             speaker.mute();
-            *wait_song = 0;
         }
     }
 
     if led.is_set_low() { return; }
-    if *wait_song > 0 {
-        *wait_song -= 1;
-        return;
-    }
-    use pwm_speaker::songs::Event::*;
+    use pwm_speaker::songs::MsEvent::*;
     match unsafe { SONG.as_mut().unwrap().next().unwrap() } {
-        Note { pitch, ms } => {
-            speaker.play((pitch as u32).hz());
-            *wait_song = ms;
-        }
-        Rest { ms } => {
-            speaker.mute();
-            *wait_song = ms;
-        }
+        BeginNote { pitch } => speaker.play(pitch),
+        EndNote => speaker.rest(),
+        Wait => (),
     };
 }
 

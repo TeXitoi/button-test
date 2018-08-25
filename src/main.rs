@@ -9,6 +9,7 @@ extern crate stm32f103xx_hal as hal;
 #[macro_use]
 extern crate stm32f103xx as device;
 extern crate pwm_speaker;
+extern crate embedded_hal;
 
 use rt::ExceptionFrame;
 use hal::prelude::*;
@@ -16,33 +17,54 @@ use hal::prelude::*;
 entry!(main);
 
 #[derive(Copy, Clone)]
-enum ButtonManager {
-    UpState(u8),
-    DownState(u8),
+pub enum ButtonEvent {
+    Pressed,
+    Reseased,
+    Nothing,
 }
-impl ButtonManager {
-    fn is_pressed(&mut self, value: bool) -> bool {
-        use ButtonManager::*;
-        match self {
-            UpState(cnt) => if value { *cnt = 0 } else { *cnt += 1 },
-            DownState(cnt) => if value { *cnt += 1 } else { *cnt = 0 },
+#[derive(Copy, Clone)]
+enum ButtonState {
+    HighState(u8),
+    LowState(u8),
+}
+struct ButtonManager<T> {
+    button: T,
+    state: ButtonState,
+}
+impl<T: embedded_hal::digital::InputPin> ButtonManager<T> {
+    pub fn new(button: T) -> Self {
+        ButtonManager {
+            button,
+            state: ButtonState::HighState(0)
         }
-        match *self {
-            UpState(cnt) if cnt >= 30 => {
-                *self = DownState(0);
-                return true;
+    }
+    pub fn poll(&mut self) -> ButtonEvent {
+        use ButtonState::*;
+        let value = self.button.is_high();
+        match &mut self.state {
+            HighState(cnt) => if value { *cnt = 0 } else { *cnt += 1 },
+            LowState(cnt) => if value { *cnt += 1 } else { *cnt = 0 },
+        }
+        match self.state {
+            HighState(cnt) if cnt >= 30 => {
+                self.state = LowState(0);
+                ButtonEvent::Pressed
             }
-            DownState(cnt) if cnt >= 30 => *self = UpState(0),
-            _ => (),
+            LowState(cnt) if cnt >= 30 => {
+                self.state = HighState(0);
+                ButtonEvent::Reseased
+            }
+            _ => ButtonEvent::Nothing,
         }
-        return false;
     }
 }
 
-static mut BUTTON: Option<hal::gpio::gpiob::PB0<hal::gpio::Input<hal::gpio::Floating>>> =
-    None;
-static mut LED: Option<hal::gpio::gpioc::PC13<hal::gpio::Output<hal::gpio::PushPull>>> =
-    None;
+type ButtonPB0 = hal::gpio::gpiob::PB0<hal::gpio::Input<hal::gpio::Floating>>;
+static mut BUTTON: Option<ButtonManager<ButtonPB0>> = None;
+
+type LedPC13 = hal::gpio::gpioc::PC13<hal::gpio::Output<hal::gpio::PushPull>>;
+static mut LED: Option<LedPC13> = None;
+
 static mut SPEAKER: Option<pwm_speaker::Speaker> = None;
 static mut SONG: Option<core::iter::Cycle<pwm_speaker::songs::MsEvents>> = None;
 
@@ -72,7 +94,7 @@ fn main() -> ! {
     let speaker = pwm_speaker::Speaker::new(pwm, clocks);
 
     unsafe {
-        BUTTON = Some(button);
+        BUTTON = Some(ButtonManager::new(button));
         LED = Some(led);
         SPEAKER = Some(speaker);
         SONG = Some(pwm_speaker::songs::THIRD_KIND.events().ms_events().cycle());
@@ -83,14 +105,14 @@ fn main() -> ! {
     }
 }
 
-interrupt!(TIM3, tim3, state: ButtonManager = ButtonManager::UpState(0));
-fn tim3(manager: &mut ButtonManager) {
+interrupt!(TIM3, tim3);
+fn tim3() {
     unsafe { (*device::TIM3::ptr()).sr.modify(|_, w| w.uif().clear_bit()); };
-    let button = unsafe { BUTTON.as_ref().unwrap() };
+    let button = unsafe { BUTTON.as_mut().unwrap() };
     let led = unsafe { LED.as_mut().unwrap() };
     let speaker = unsafe { SPEAKER.as_mut().unwrap() };
 
-    if manager.is_pressed(button.is_high()) {
+    if let ButtonEvent::Pressed = button.poll() {
         if led.is_set_low() {
             led.set_high();
             speaker.unmute();

@@ -10,3 +10,4 @@ cortex-m = "0.5"
 cortex-m-rt = { version = "0.5", features = ["device"] }
 panic-semihosting = "0.3"
 pwm-speaker = { git = "https://github.com/TeXitoi/pwm-speaker" }
+embedded-hal = "0.2.1"
